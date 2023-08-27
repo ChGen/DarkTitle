@@ -1,7 +1,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <dwmapi.h>
 #include <unordered_map>
 #include <algorithm>
+
+#pragma comment(lib, "dwmapi.lib")
 
 //Non-public Win32 APIs. Credits to:
 //https://github.com/ysc3839/win32-darkmode/blob/master/win32-darkmode/DarkMode.h
@@ -21,11 +24,31 @@ struct WINDOWCOMPOSITIONATTRIBDATA
     SIZE_T cbData;
 };
 
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+
 using fnSetWindowCompositionAttribute = BOOL(WINAPI*)(HWND hWnd, WINDOWCOMPOSITIONATTRIBDATA*);
 fnSetWindowCompositionAttribute _SetWindowCompositionAttribute = nullptr;
 
+bool _isLight = false;
 bool _mark = false;
 std::unordered_map<HWND, bool> _titles;
+
+bool isLightTheme() {
+    DWORD value = 0;
+    DWORD cbData = static_cast<DWORD>(sizeof(value));
+    auto res = RegGetValueW(
+        HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme",
+        RRF_RT_REG_DWORD, NULL, &value, &cbData
+    );
+    if (res != ERROR_SUCCESS) {
+        return true;
+    }
+    return value == 1;
+}
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
@@ -45,17 +68,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     BOOL dark = TRUE;
     WINDOWCOMPOSITIONATTRIBDATA data = { WCA_USEDARKMODECOLORS, &dark, sizeof(dark) };
     SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
     WNDENUMPROC proc = [](HWND hWnd, LPARAM lParam)
     {
+        BOOL val = !_isLight;
         if (_titles.find(hWnd) == _titles.cend())
-            _SetWindowCompositionAttribute(hWnd, (WINDOWCOMPOSITIONATTRIBDATA*)lParam);
+            DwmSetWindowAttribute(hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &val, sizeof(val));
         _titles[hWnd] = _mark;
         return TRUE;
     };
 
+    _isLight = isLightTheme();
     while (true)
     {
         EnumWindows(proc, (LPARAM)&data);
+
         for (auto it = _titles.begin(); it != _titles.end();)
         {
             if (it->second != _mark)
@@ -65,6 +92,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         }
         Sleep(75);
         _mark = !_mark;
+        bool status = isLightTheme();
+        if (status != _isLight)
+        {
+            _isLight = status;
+            _titles.clear();
+        }
     }
     return 0;
 }
